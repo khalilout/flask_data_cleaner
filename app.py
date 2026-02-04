@@ -7,6 +7,8 @@ import io
 import json
 
 app = Flask(__name__)
+@app.route("/")
+
 
 #  Fusion intelligente des valeurs
 def fusion_valeurs(series):

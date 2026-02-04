@@ -37,6 +37,7 @@ def detecter_colonnes_cles(df):
 
 
 @app.route('/clean', methods=['POST'])
+@app.route('/api/clean', methods=['POST'])
 def import_file():
     file = request.files['file']
     ext = file.filename.split('.')[-1].lower()

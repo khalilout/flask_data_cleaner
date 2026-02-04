@@ -8,7 +8,8 @@ import json
 
 app = Flask(__name__)
 @app.route("/")
-
+def index():
+    return "Service de nettoyage de données est opérationnel."
 
 #  Fusion intelligente des valeurs
 def fusion_valeurs(series):

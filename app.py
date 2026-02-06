@@ -50,36 +50,66 @@ def import_file():
     elif ext == 'json':
         df = pd.read_json(file)
     elif ext == 'xml':
-        # Lire le contenu du fichier XML
-        content = file.read()
-        data = xmltodict.parse(content)
-        
-        # Trouver les données (première clé du dictionnaire)
-        root_key = list(data.keys())[0]
-        root = data[root_key]
-        
-        # Si c'est une liste, c'est bon
-        if isinstance(root, list):
-            records = root
-        # Si c'est un dictionnaire
-        elif isinstance(root, dict):
-            # Chercher la première liste dans le dictionnaire
-            records = None
-            for key, value in root.items():
-                if isinstance(value, list):
-                    records = value
-                    break
-            # Si pas de liste trouvée, c'est un seul enregistrement
-            if records is None:
-                records = [root]
-        else:
-            # Si ce n'est ni liste ni dict, mettre dans une liste
-            records = [root]
-        
-        # Créer le DataFrame
-        df = pd.DataFrame(records) 
+        # ✅ CORRECTION LIGNE 52-68 : Meilleure gestion du XML
+        try:
+            content = file.read()
+            data = xmltodict.parse(content)
+            
+            # Essayer de trouver les enregistrements
+            if 'root' in data:
+                records = data['root']
+            else:
+                # Prendre le premier élément
+                root_key = list(data.keys())[0]
+                records = data[root_key]
+            
+            # Si c'est un dictionnaire unique, le transformer en liste
+            if isinstance(records, dict):
+                if any(isinstance(v, list) for v in records.values()):
+                    # Il y a des listes dans le dict, prendre la première liste
+                    for key, value in records.items():
+                        if isinstance(value, list):
+                            records = value
+                            break
+                else:
+                    records = [records]
+            
+            df = pd.DataFrame(records)
+        except Exception as e:
+            return f"Erreur lors de la lecture du fichier XML: {str(e)}", 400
     else:
         return "Format non supporté", 400
+    # elif ext == 'xml':
+    #     # Lire le contenu du fichier XML
+    #     content = file.read()
+    #     data = xmltodict.parse(content)
+        
+    #     # Trouver les données (première clé du dictionnaire)
+    #     root_key = list(data.keys())[0]
+    #     root = data[root_key]
+        
+    #     # Si c'est une liste, c'est bon
+    #     if isinstance(root, list):
+    #         records = root
+    #     # Si c'est un dictionnaire
+    #     elif isinstance(root, dict):
+    #         # Chercher la première liste dans le dictionnaire
+    #         records = None
+    #         for key, value in root.items():
+    #             if isinstance(value, list):
+    #                 records = value
+    #                 break
+    #         # Si pas de liste trouvée, c'est un seul enregistrement
+    #         if records is None:
+    #             records = [root]
+    #     else:
+    #         # Si ce n'est ni liste ni dict, mettre dans une liste
+    #         records = [root]
+        
+    #     # Créer le DataFrame
+    #     df = pd.DataFrame(records) 
+    # else:
+    #     return "Format non supporté", 400
 
 
     #  Nettoyage initial ("--" → NaN)

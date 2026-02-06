@@ -157,11 +157,17 @@ def import_file():
                 "min": float(df[col].min()),
                 "max": float(df[col].max()),
                 "std": float(df[col].std()),
+                "missing": stats_avant.get(col, {}).get("missing", 0), 
+                "duplicates": nb_doublons_total,  
+                "outliers": nb_aberrantes.get(col, 0) 
             }
         else:
             stats[col] = {
                 "mode": str(df[col].mode()[0]),
-                "unique_count": int(df[col].nunique())
+                "unique_count": int(df[col].nunique()),
+                "missing": stats_avant.get(col, {}).get("missing", 0),
+                "duplicates": nb_doublons_total,  
+                "outliers": nb_aberrantes.get(col, 0) 
             }
 
     # Export CSV

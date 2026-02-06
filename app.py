@@ -50,12 +50,34 @@ def import_file():
     elif ext == 'json':
         df = pd.read_json(file)
     elif ext == 'xml':
-        data = xmltodict.parse(file.read())
-        root = list(data.values())[0]        
-        records = list(root.values())[0]     
-        if isinstance(records, dict):
-            records = [records]              
-        df = pd.DataFrame(records)  
+        # Lire le contenu du fichier XML
+        content = file.read()
+        data = xmltodict.parse(content)
+        
+        # Trouver les données (première clé du dictionnaire)
+        root_key = list(data.keys())[0]
+        root = data[root_key]
+        
+        # Si c'est une liste, c'est bon
+        if isinstance(root, list):
+            records = root
+        # Si c'est un dictionnaire
+        elif isinstance(root, dict):
+            # Chercher la première liste dans le dictionnaire
+            records = None
+            for key, value in root.items():
+                if isinstance(value, list):
+                    records = value
+                    break
+            # Si pas de liste trouvée, c'est un seul enregistrement
+            if records is None:
+                records = [root]
+        else:
+            # Si ce n'est ni liste ni dict, mettre dans une liste
+            records = [root]
+        
+        # Créer le DataFrame
+        df = pd.DataFrame(records) 
     else:
         return "Format non supporté", 400
 

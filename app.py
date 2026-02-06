@@ -112,6 +112,7 @@ def import_file():
     ]
 
     df.replace(VALEURS_MANQUANTES, np.nan, inplace=True)
+    
 
     #  FUSION DES DOUBLONS (IMPORTANT)
     colonnes_cles = detecter_colonnes_cles(df)
@@ -171,6 +172,16 @@ def import_file():
 
     # 🔹 Calcul des statistiques pour graphes
     stats = {}
+    stats_avant = {}
+    nb_aberrantes = {}
+    nb_doublons_total = int(df.duplicated().sum())
+
+    for col in df.columns:
+        stats_avant[col] = {
+            "missing": int(df[col].isnull().sum())
+        }
+        nb_aberrantes[col] = 0
+
     for col in df.columns:
         if col in num_cols:
             stats[col] = {

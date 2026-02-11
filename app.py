@@ -50,33 +50,63 @@ def import_file():
     elif ext == 'json':
         df = pd.read_json(file)
     elif ext == 'xml':
-        # ✅ CORRECTION LIGNE 52-68 : Meilleure gestion du XML
-        try:
-            content = file.read()
-            data = xmltodict.parse(content)
-            
-            # Essayer de trouver les enregistrements
-            if 'root' in data:
-                records = data['root']
-            else:
-                # Prendre le premier élément
-                root_key = list(data.keys())[0]
-                records = data[root_key]
-            
-            # Si c'est un dictionnaire unique, le transformer en liste
-            if isinstance(records, dict):
-                if any(isinstance(v, list) for v in records.values()):
-                    # Il y a des listes dans le dict, prendre la première liste
+            # ✅ CORRECTION XML : Parsing amélioré
+            try:
+                content = file.read()
+                data = xmltodict.parse(content)
+                
+                print(f"🔍 Clés XML trouvées: {list(data.keys())}")
+                
+                # Stratégie de recherche des records
+                records = None
+                
+                # 1. Chercher dans les clés communes
+                if 'root' in data:
+                    records = data['root']
+                elif 'data' in data:
+                    records = data['data']
+                elif 'records' in data:
+                    records = data['records']
+                elif 'items' in data:
+                    records = data['items']
+                else:
+                    # Prendre la première clé
+                    root_key = list(data.keys())[0]
+                    records = data[root_key]
+                    print(f"✅ Utilisation de la clé racine: {root_key}")
+                
+                # 2. Si records est un dict, chercher une liste dedans
+                if isinstance(records, dict):
+                    print(f"🔍 Records est un dict, recherche de liste...")
+                    found_list = False
+                    
                     for key, value in records.items():
                         if isinstance(value, list):
                             records = value
+                            found_list = True
+                            print(f"✅ Liste trouvée dans la clé: {key}")
                             break
+                    
+                    # Si pas de liste trouvée, c'est un seul record
+                    if not found_list:
+                        records = [records]
+                        print("⚠️ Aucune liste trouvée, conversion en liste unique")
+                
+                # 3. Si records est déjà une liste, c'est bon
+                elif isinstance(records, list):
+                    print(f"✅ Records est déjà une liste de {len(records)} éléments")
                 else:
+                    # Cas imprévu, le mettre en liste
                     records = [records]
-            
-            df = pd.DataFrame(records)
-        except Exception as e:
-            return f"Erreur lors de la lecture du fichier XML: {str(e)}", 400
+                    print("⚠️ Type inattendu, conversion en liste")
+                
+                df = pd.DataFrame(records)
+                print(f"✅ DataFrame créé: {df.shape[0]} lignes, {df.shape[1]} colonnes")
+                
+            except Exception as e:
+                error_msg = f"Erreur lors de la lecture du fichier XML: {str(e)}"
+                print(f"❌ {error_msg}")
+                return jsonify({"error": error_msg}), 400
     else:
         return "Format non supporté", 400
     # elif ext == 'xml':
@@ -111,6 +141,10 @@ def import_file():
     # else:
     #     return "Format non supporté", 400
 
+    df_original = df.copy()
+    print(f"💾 Données originales sauvegardées: {df_original.shape}")
+
+        # Nettoyage initial ("--" → NaN)
 
     #  Nettoyage initial ("--" → NaN)
     VALEURS_MANQUANTES = [
@@ -200,38 +234,64 @@ def import_file():
 
             
 
-    # 🔹 Calcul des statistiques pour graphes
-    stats = {}
-    stats_avant = {}
-    nb_aberrantes = {}
-    nb_doublons_total = int(df.duplicated().sum())
+    # ✅ CORRECTION STATISTIQUES : Calculer sur l'ORIGINAL !
+        stats = {}
+        
+        # Calculer le nombre total de doublons sur l'ORIGINAL
+        nb_doublons_total = int(df_original.duplicated().sum())
+        print(f"📊 Doublons totaux trouvés: {nb_doublons_total}")
 
-    for col in df.columns:
-        stats_avant[col] = {
-            "missing": int(df[col].isnull().sum())
-        }
-        nb_aberrantes[col] = 0
+        for col in df.columns:
+            stats[col] = {}
+            
+            # ✅ Valeurs manquantes calculées sur l'ORIGINAL
+            if col in df_original.columns:
+                stats[col]["missing"] = int(df_original[col].isnull().sum())
+                print(f"📊 {col}: {stats[col]['missing']} valeurs manquantes")
+            else:
+                stats[col]["missing"] = 0
+            
+            # ✅ Doublons calculés sur l'ORIGINAL
+            if col in df_original.columns:
+                stats[col]["duplicates"] = int(df_original[col].duplicated().sum())
+            else:
+                stats[col]["duplicates"] = 0
+            
+            if col in num_cols:
+                # Pour les colonnes numériques
+                # ✅ Calculer les outliers sur l'ORIGINAL
+                if col in df_original.columns:
+                    # Convertir en numérique pour le calcul
+                    col_original_numeric = pd.to_numeric(df_original[col], errors='coerce')
+                    
+                    Q1 = col_original_numeric.quantile(0.25)
+                    Q3 = col_original_numeric.quantile(0.75)
+                    IQR = Q3 - Q1
+                    
+                    # Compter les outliers
+                    outliers_mask = (col_original_numeric < Q1 - 1.5*IQR) | (col_original_numeric > Q3 + 1.5*IQR)
+                    stats[col]["outliers"] = int(outliers_mask.sum())
+                    print(f"📊 {col}: {stats[col]['outliers']} valeurs aberrantes")
+                else:
+                    stats[col]["outliers"] = 0
+                
+                # Statistiques descriptives (sur le nettoyé)
+                stats[col]["mean"] = float(df[col].mean())
+                stats[col]["median"] = float(df[col].median())
+                stats[col]["min"] = float(df[col].min())
+                stats[col]["max"] = float(df[col].max())
+                stats[col]["std"] = float(df[col].std())
+            else:
+                # Pour les colonnes catégorielles
+                if len(df[col].mode()) > 0:
+                    stats[col]["mode"] = str(df[col].mode()[0])
+                else:
+                    stats[col]["mode"] = "N/A"
+                stats[col]["unique_count"] = int(df[col].nunique())
+                stats[col]["outliers"] = 0  # Pas d'outliers pour catégorielles
 
-    for col in df.columns:
-        if col in num_cols:
-            stats[col] = {
-                "mean": float(df[col].mean()),
-                "median": float(df[col].median()),
-                "min": float(df[col].min()),
-                "max": float(df[col].max()),
-                "std": float(df[col].std()),
-                "missing": stats_avant.get(col, {}).get("missing", 0), 
-                "duplicates": nb_doublons_total,  
-                "outliers": nb_aberrantes.get(col, 0) 
-            }
-        else:
-            stats[col] = {
-                "mode": str(df[col].mode()[0]),
-                "unique_count": int(df[col].nunique()),
-                "missing": stats_avant.get(col, {}).get("missing", 0),
-                "duplicates": nb_doublons_total,  
-                "outliers": nb_aberrantes.get(col, 0) 
-            }
+        print(f"✅ Statistiques calculées pour {len(stats)} colonnes")
+
 
     # Export CSV
     output = io.BytesIO()

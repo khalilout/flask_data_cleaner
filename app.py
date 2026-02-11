@@ -1,6 +1,6 @@
 import os
 import numpy as np  # ajouté
-from flask import Flask, request, send_file, make_response
+from flask import Flask, request, send_file, make_response, jsonify
 import pandas as pd
 import xmltodict
 import io
@@ -235,58 +235,58 @@ def import_file():
             
 
     # ✅ CORRECTION STATISTIQUES : Calculer sur l'ORIGINAL !
-        stats = {}
+    stats = {}
         
-        # Calculer le nombre total de doublons sur l'ORIGINAL
-        nb_doublons_total = int(df_original.duplicated().sum())
-        print(f"📊 Doublons totaux trouvés: {nb_doublons_total}")
+    # Calculer le nombre total de doublons sur l'ORIGINAL
+    nb_doublons_total = int(df_original.duplicated().sum())
+    print(f"📊 Doublons totaux trouvés: {nb_doublons_total}")
 
-        for col in df.columns:
-            stats[col] = {}
+    for col in df.columns:
+        stats[col] = {}
             
-            # ✅ Valeurs manquantes calculées sur l'ORIGINAL
+        # ✅ Valeurs manquantes calculées sur l'ORIGINAL
+        if col in df_original.columns:
+            stats[col]["missing"] = int(df_original[col].isnull().sum())
+            print(f"📊 {col}: {stats[col]['missing']} valeurs manquantes")
+        else:
+            stats[col]["missing"] = 0
+            
+        # ✅ Doublons calculés sur l'ORIGINAL
+        if col in df_original.columns:
+            stats[col]["duplicates"] = int(df_original[col].duplicated().sum())
+        else:
+            stats[col]["duplicates"] = 0
+            
+        if col in num_cols:
+            # Pour les colonnes numériques
+            # ✅ Calculer les outliers sur l'ORIGINAL
             if col in df_original.columns:
-                stats[col]["missing"] = int(df_original[col].isnull().sum())
-                print(f"📊 {col}: {stats[col]['missing']} valeurs manquantes")
-            else:
-                stats[col]["missing"] = 0
-            
-            # ✅ Doublons calculés sur l'ORIGINAL
-            if col in df_original.columns:
-                stats[col]["duplicates"] = int(df_original[col].duplicated().sum())
-            else:
-                stats[col]["duplicates"] = 0
-            
-            if col in num_cols:
-                # Pour les colonnes numériques
-                # ✅ Calculer les outliers sur l'ORIGINAL
-                if col in df_original.columns:
-                    # Convertir en numérique pour le calcul
-                    col_original_numeric = pd.to_numeric(df_original[col], errors='coerce')
+                # Convertir en numérique pour le calcul
+                col_original_numeric = pd.to_numeric(df_original[col], errors='coerce')
                     
-                    Q1 = col_original_numeric.quantile(0.25)
-                    Q3 = col_original_numeric.quantile(0.75)
-                    IQR = Q3 - Q1
+                Q1 = col_original_numeric.quantile(0.25)
+                Q3 = col_original_numeric.quantile(0.75)
+                IQR = Q3 - Q1
                     
-                    # Compter les outliers
-                    outliers_mask = (col_original_numeric < Q1 - 1.5*IQR) | (col_original_numeric > Q3 + 1.5*IQR)
-                    stats[col]["outliers"] = int(outliers_mask.sum())
-                    print(f"📊 {col}: {stats[col]['outliers']} valeurs aberrantes")
-                else:
-                    stats[col]["outliers"] = 0
+                # Compter les outliers
+                outliers_mask = (col_original_numeric < Q1 - 1.5*IQR) | (col_original_numeric > Q3 + 1.5*IQR)
+                stats[col]["outliers"] = int(outliers_mask.sum())
+                print(f"📊 {col}: {stats[col]['outliers']} valeurs aberrantes")
+            else:
+                stats[col]["outliers"] = 0
                 
-                # Statistiques descriptives (sur le nettoyé)
-                stats[col]["mean"] = float(df[col].mean())
-                stats[col]["median"] = float(df[col].median())
-                stats[col]["min"] = float(df[col].min())
-                stats[col]["max"] = float(df[col].max())
-                stats[col]["std"] = float(df[col].std())
+            # Statistiques descriptives (sur le nettoyé)
+            stats[col]["mean"] = float(df[col].mean())
+            stats[col]["median"] = float(df[col].median())
+            stats[col]["min"] = float(df[col].min())
+            stats[col]["max"] = float(df[col].max())
+            stats[col]["std"] = float(df[col].std())
+        else:
+            # Pour les colonnes catégorielles
+            if len(df[col].mode()) > 0:
+                stats[col]["mode"] = str(df[col].mode()[0])
             else:
-                # Pour les colonnes catégorielles
-                if len(df[col].mode()) > 0:
-                    stats[col]["mode"] = str(df[col].mode()[0])
-                else:
-                    stats[col]["mode"] = "N/A"
+                stats[col]["mode"] = "N/A"
                 stats[col]["unique_count"] = int(df[col].nunique())
                 stats[col]["outliers"] = 0  # Pas d'outliers pour catégorielles
 

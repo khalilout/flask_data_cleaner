@@ -48,13 +48,13 @@ def import_file():
 
     # Lecture du fichier selon son format
     if ext in ['csv', 'txt']:
-        df = pd.read_csv(BytesIO(file))
+        df = pd.read_csv(BytesIO(file.read()))
     elif ext in ['xls', 'xlsx']:
-        df = pd.read_excel(BytesIO(file))
+        df = pd.read_excel(BytesIO(file.read()))
     elif ext == 'json':
-        df = pd.read_json(BytesIO(file))
+        df = pd.read_json(BytesIO(file.read()))
     elif ext == 'xml':
-        df = pd.read_xml(BytesIO(file))
+        df = pd.read_xml(BytesIO(file.read()))
     else:
         return "Format non supporté", 400
 
@@ -111,7 +111,8 @@ def import_file():
         if df[col].isnull().sum() > 0:
             skewness = df[col].skew()
             if abs(skewness) < 0.5:
-                df[col] = df[col].fillna(df[col].mean())
+                if not df[col].dropna().empty:
+                    df[col] = df[col].fillna(df[col].mean())
             else:
                 df[col] = df[col].fillna(df[col].median())
 
@@ -204,7 +205,7 @@ def import_file():
                 stats[col]["unique_count"] = int(df[col].nunique())
                 stats[col]["outliers"] = 0  # Pas d'outliers pour catégorielles
 
-        print(f"✅ Statistiques calculées pour {len(stats)} colonnes")
+    print(f"✅ Statistiques calculées pour {len(stats)} colonnes")
 
 
     # Export CSV

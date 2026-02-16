@@ -48,111 +48,19 @@ def import_file():
 
     # Lecture du fichier selon son format
     if ext in ['csv', 'txt']:
-        df = pd.read_csv(file)
+        df = pd.read_csv(BytesIO(file))
     elif ext in ['xls', 'xlsx']:
-        df = pd.read_excel(file)
+        df = pd.read_excel(BytesIO(file))
     elif ext == 'json':
-        df = pd.read_json(file)
+        df = pd.read_json(BytesIO(file))
     elif ext == 'xml':
         df = pd.read_xml(BytesIO(file))
-    # elif ext == 'xml':
-    #         # ✅ CORRECTION XML : Parsing amélioré
-    #         try:
-    #             content = file.read()
-    #             data = xmltodict.parse(content)
-                
-    #             print(f"🔍 Clés XML trouvées: {list(data.keys())}")
-                
-    #             # Stratégie de recherche des records
-    #             records = None
-                
-    #             # 1. Chercher dans les clés communes
-    #             if 'root' in data:
-    #                 records = data['root']
-    #             elif 'data' in data:
-    #                 records = data['data']
-    #             elif 'records' in data:
-    #                 records = data['records']
-    #             elif 'items' in data:
-    #                 records = data['items']
-    #             else:
-    #                 # Prendre la première clé
-    #                 root_key = list(data.keys())[0]
-    #                 records = data[root_key]
-    #                 print(f"✅ Utilisation de la clé racine: {root_key}")
-                
-    #             # 2. Si records est un dict, chercher une liste dedans
-    #             if isinstance(records, dict):
-    #                 print(f"🔍 Records est un dict, recherche de liste...")
-    #                 found_list = False
-                    
-    #                 for key, value in records.items():
-    #                     if isinstance(value, list):
-    #                         records = value
-    #                         found_list = True
-    #                         print(f"✅ Liste trouvée dans la clé: {key}")
-    #                         break
-                    
-    #                 # Si pas de liste trouvée, c'est un seul record
-    #                 if not found_list:
-    #                     records = [records]
-    #                     print("⚠️ Aucune liste trouvée, conversion en liste unique")
-                
-    #             # 3. Si records est déjà une liste, c'est bon
-    #             elif isinstance(records, list):
-    #                 print(f"✅ Records est déjà une liste de {len(records)} éléments")
-    #             else:
-    #                 # Cas imprévu, le mettre en liste
-    #                 records = [records]
-    #                 print("⚠️ Type inattendu, conversion en liste")
-                
-    #             df = pd.DataFrame(records)
-    #             print(f"✅ DataFrame créé: {df.shape[0]} lignes, {df.shape[1]} colonnes")
-                
-    #         except Exception as e:
-    #             error_msg = f"Erreur lors de la lecture du fichier XML: {str(e)}"
-    #             print(f"❌ {error_msg}")
-    #             return jsonify({"error": error_msg}), 400
-    # else:
-    #     return "Format non supporté", 400
-    # elif ext == 'xml':
-    #     # Lire le contenu du fichier XML
-    #     content = file.read()
-    #     data = xmltodict.parse(content)
-        
-    #     # Trouver les données (première clé du dictionnaire)
-    #     root_key = list(data.keys())[0]
-    #     root = data[root_key]
-        
-    #     # Si c'est une liste, c'est bon
-    #     if isinstance(root, list):
-    #         records = root
-    #     # Si c'est un dictionnaire
-    #     elif isinstance(root, dict):
-    #         # Chercher la première liste dans le dictionnaire
-    #         records = None
-    #         for key, value in root.items():
-    #             if isinstance(value, list):
-    #                 records = value
-    #                 break
-    #         # Si pas de liste trouvée, c'est un seul enregistrement
-    #         if records is None:
-    #             records = [root]
-    #     else:
-    #         # Si ce n'est ni liste ni dict, mettre dans une liste
-    #         records = [root]
-        
-    #     # Créer le DataFrame
-    #     df = pd.DataFrame(records) 
     else:
         return "Format non supporté", 400
 
     df_original = df.copy()
     print(f"💾 Données originales sauvegardées: {df_original.shape}")
 
-        # Nettoyage initial ("--" → NaN)
-
-    #  Nettoyage initial ("--" → NaN)
     VALEURS_MANQUANTES = [
         "", " ", "  ", "   ", "\t", "\n", "\r",
 

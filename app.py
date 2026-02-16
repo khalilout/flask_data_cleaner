@@ -5,6 +5,7 @@ import pandas as pd
 import xmltodict
 import io
 import json
+import BytesIO
 
 app = Flask(__name__)
 @app.route("/")
@@ -30,13 +31,10 @@ def detecter_colonnes_cles(df):
     colonnes_cles = []
 
     for col in colonnes_obj:
-        # 🔹 Convertir tout en string avant nunique()
-        serie = df[col].astype(str)
-        if serie.nunique() > 1:
+        if df[col].nunique() > 1:
             colonnes_cles.append(col)
 
     return colonnes_cles
-
 
 
 @app.route('/clean', methods=['POST'])
@@ -52,6 +50,8 @@ def import_file():
         df = pd.read_excel(file)
     elif ext == 'json':
         df = pd.read_json(file)
+    elif ext == 'xml':
+        df = pd.read_xml(BytesIO(file))
     # elif ext == 'xml':
     #         # ✅ CORRECTION XML : Parsing amélioré
     #         try:
@@ -197,19 +197,12 @@ def import_file():
     colonnes_categorielles = df.select_dtypes(include=["object"]).columns #si la colonne est catégorielle
 
     for col in colonnes_numeriques:
-
-        # Si toute la colonne est vide → on met 0
-        if df[col].isnull().all():
-            df[col] = df[col].fillna(0)
-            continue
-
         if df[col].isnull().sum() > 0:
             skewness = df[col].skew()
-
             if abs(skewness) < 0.5:
-                df[col] = df[col].fillna(df[col].mean())
+                df[col].fillna(df[col].mean(), inplace=True)
             else:
-                df[col] = df[col].fillna(df[col].median())
+                df[col].fillna(df[col].median(), inplace=True)
 
     for col in colonnes_categorielles:
         if df[col].isnull().sum() > 0:

@@ -8,6 +8,7 @@ import json
 from io import BytesIO
 
 app = Flask(__name__)
+CORS(app)
 @app.route("/")
 def index():
     return "Service de nettoyage de données est opérationnel."
@@ -112,35 +113,35 @@ def import_file():
     #             return jsonify({"error": error_msg}), 400
     # else:
     #     return "Format non supporté", 400
-    elif ext == 'xml':
-        # Lire le contenu du fichier XML
-        content = file.read()
-        data = xmltodict.parse(content)
+    # elif ext == 'xml':
+    #     # Lire le contenu du fichier XML
+    #     content = file.read()
+    #     data = xmltodict.parse(content)
         
-        # Trouver les données (première clé du dictionnaire)
-        root_key = list(data.keys())[0]
-        root = data[root_key]
+    #     # Trouver les données (première clé du dictionnaire)
+    #     root_key = list(data.keys())[0]
+    #     root = data[root_key]
         
-        # Si c'est une liste, c'est bon
-        if isinstance(root, list):
-            records = root
-        # Si c'est un dictionnaire
-        elif isinstance(root, dict):
-            # Chercher la première liste dans le dictionnaire
-            records = None
-            for key, value in root.items():
-                if isinstance(value, list):
-                    records = value
-                    break
-            # Si pas de liste trouvée, c'est un seul enregistrement
-            if records is None:
-                records = [root]
-        else:
-            # Si ce n'est ni liste ni dict, mettre dans une liste
-            records = [root]
+    #     # Si c'est une liste, c'est bon
+    #     if isinstance(root, list):
+    #         records = root
+    #     # Si c'est un dictionnaire
+    #     elif isinstance(root, dict):
+    #         # Chercher la première liste dans le dictionnaire
+    #         records = None
+    #         for key, value in root.items():
+    #             if isinstance(value, list):
+    #                 records = value
+    #                 break
+    #         # Si pas de liste trouvée, c'est un seul enregistrement
+    #         if records is None:
+    #             records = [root]
+    #     else:
+    #         # Si ce n'est ni liste ni dict, mettre dans une liste
+    #         records = [root]
         
-        # Créer le DataFrame
-        df = pd.DataFrame(records) 
+    #     # Créer le DataFrame
+    #     df = pd.DataFrame(records) 
     else:
         return "Format non supporté", 400
 
@@ -200,13 +201,13 @@ def import_file():
         if df[col].isnull().sum() > 0:
             skewness = df[col].skew()
             if abs(skewness) < 0.5:
-                df[col].fillna(df[col].mean(), inplace=True)
+                df[col] = df[col].fillna(df[col].mean())
             else:
-                df[col].fillna(df[col].median(), inplace=True)
+                df[col] = df[col].fillna(df[col].median())
 
     for col in colonnes_categorielles:
         if df[col].isnull().sum() > 0:
-            df[col].fillna(df[col].mode()[0], inplace=True)
+            df[col] = df[col].fillna(df[col].mode()[0])
 
     # Valeur Aberante
     outlier_method = request.form.get("outlier_method", "none")

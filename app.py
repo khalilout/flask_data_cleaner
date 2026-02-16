@@ -30,10 +30,13 @@ def detecter_colonnes_cles(df):
     colonnes_cles = []
 
     for col in colonnes_obj:
-        if df[col].nunique() > 1:
+        # 🔹 Convertir tout en string avant nunique()
+        serie = df[col].astype(str)
+        if serie.nunique() > 1:
             colonnes_cles.append(col)
 
     return colonnes_cles
+
 
 
 @app.route('/clean', methods=['POST'])

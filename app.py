@@ -6,6 +6,8 @@ import xmltodict
 import io
 import json
 from io import BytesIO
+from flask_cors import CORS
+
 
 app = Flask(__name__)
 CORS(app)

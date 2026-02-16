@@ -5,7 +5,7 @@ import pandas as pd
 import xmltodict
 import io
 import json
-import BytesIO
+from io import BytesIO
 
 app = Flask(__name__)
 @app.route("/")

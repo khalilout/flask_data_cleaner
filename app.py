@@ -197,12 +197,19 @@ def import_file():
     colonnes_categorielles = df.select_dtypes(include=["object"]).columns #si la colonne est catégorielle
 
     for col in colonnes_numeriques:
+
+        # Si toute la colonne est vide → on met 0
+        if df[col].isnull().all():
+            df[col] = df[col].fillna(0)
+            continue
+
         if df[col].isnull().sum() > 0:
             skewness = df[col].skew()
+
             if abs(skewness) < 0.5:
-                df[col].fillna(df[col].mean(), inplace=True)
+                df[col] = df[col].fillna(df[col].mean())
             else:
-                df[col].fillna(df[col].median(), inplace=True)
+                df[col] = df[col].fillna(df[col].median())
 
     for col in colonnes_categorielles:
         if df[col].isnull().sum() > 0:

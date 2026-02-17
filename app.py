@@ -38,6 +38,15 @@ def detecter_colonnes_cles(df):
 
     return colonnes_cles
 
+def safe_float(value):
+    try:
+        if pd.isna(value) or np.isinf(value):
+            return None
+        return float(value)
+    except:
+        return None
+
+
 
 @app.route('/clean', methods=['POST'])
 @app.route('/api/clean', methods=['POST'])
@@ -56,6 +65,8 @@ def import_file():
         df = pd.read_xml(BytesIO(file.read()), xpath=".//record")
     else:
         return "Format non supporté", 400
+
+    df_original = df.copy()
 
     #  Nettoyage initial ("--" → NaN)
     VALEURS_MANQUANTES = [
@@ -157,7 +168,7 @@ def import_file():
 
 
       # 1️⃣ Copie de l'original AVANT tout nettoyage
-    df_original = df.copy()
+    
 
     # 2️⃣ Valeurs manquantes : NaN + valeurs de la liste
     stats_missing = {}

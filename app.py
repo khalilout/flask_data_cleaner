@@ -37,6 +37,31 @@ def detecter_colonnes_cles(df):
             colonnes_cles.append(col)
 
     return colonnes_cles
+def calculer_stats(df):
+    stats = {}
+    nb_doublons = int(df.duplicated().sum())
+
+    for col in df.columns:
+        if df[col].dtype in ["int64", "float64"]:
+            stats[col] = {
+                "missing": int(df[col].isnull().sum()),
+                "mean": float(df[col].mean()) if df[col].notna().sum() else 0,
+                "median": float(df[col].median()) if df[col].notna().sum() else 0,
+                "min": float(df[col].min()) if df[col].notna().sum() else 0,
+                "max": float(df[col].max()) if df[col].notna().sum() else 0,
+                "duplicates": nb_doublons
+            }
+        else:
+            mode = df[col].mode()
+            stats[col] = {
+                "missing": int(df[col].isnull().sum()),
+                "mode": str(mode.iloc[0]) if not mode.empty else "inconnu",
+                "unique_count": int(df[col].nunique()),
+                "duplicates": nb_doublons
+            }
+
+    return stats
+
 
 
 @app.route('/clean', methods=['POST'])
@@ -56,6 +81,9 @@ def import_file():
         df = pd.read_xml(BytesIO(file.read()), xpath=".//record")
     else:
         return "Format non supporté", 400
+
+    df_original = df.copy()
+    stats_before = calculer_stats(df_original)
 
     #  Nettoyage initial ("--" → NaN)
     VALEURS_MANQUANTES = [
@@ -157,38 +185,41 @@ def import_file():
 
             
 
-    # 🔹 Calcul des statistiques pour graphes
-    stats = {}
-    stats_avant = {}
-    nb_aberrantes = {}
-    nb_doublons_total = int(df.duplicated().sum())
+    # # 🔹 Calcul des statistiques pour graphes
+    # stats = {}
+    # stats_avant = {}
+    # nb_aberrantes = {}
+    # nb_doublons_total = int(df.duplicated().sum())
 
-    for col in df.columns:
-        stats_avant[col] = {
-            "missing": int(df[col].isnull().sum())
-        }
-        nb_aberrantes[col] = 0
+    # for col in df.columns:
+    #     stats_avant[col] = {
+    #         "missing": int(df[col].isnull().sum())
+    #     }
+    #     nb_aberrantes[col] = 0
 
-    for col in df.columns:
-        if col in num_cols:
-            stats[col] = {
-                "mean": float(df[col].mean()),
-                "median": float(df[col].median()),
-                "min": float(df[col].min()),
-                "max": float(df[col].max()),
-                "std": float(df[col].std()),
-                "missing": stats_avant.get(col, {}).get("missing", 0), 
-                "duplicates": nb_doublons_total,  
-                "outliers": nb_aberrantes.get(col, 0) 
-            }
-        else:
-            stats[col] = {
-                "mode": str(df[col].mode().iloc[0] if not df[col].mode().empty else "inconnu"),
-                "unique_count": int(df[col].nunique()),
-                "missing": stats_avant.get(col, {}).get("missing", 0),
-                "duplicates": nb_doublons_total,  
-                "outliers": nb_aberrantes.get(col, 0) 
-            }
+    # for col in df.columns:
+    #     if col in num_cols:
+    #         stats[col] = {
+    #             "mean": float(df[col].mean()),
+    #             "median": float(df[col].median()),
+    #             "min": float(df[col].min()),
+    #             "max": float(df[col].max()),
+    #             "std": float(df[col].std()),
+    #             "missing": stats_avant.get(col, {}).get("missing", 0), 
+    #             "duplicates": nb_doublons_total,  
+    #             "outliers": nb_aberrantes.get(col, 0) 
+    #         }
+    #     else:
+    #         stats[col] = {
+    #             "mode": str(df[col].mode().iloc[0] if not df[col].mode().empty else "inconnu"),
+    #             "unique_count": int(df[col].nunique()),
+    #             "missing": stats_avant.get(col, {}).get("missing", 0),
+    #             "duplicates": nb_doublons_total,  
+    #             "outliers": nb_aberrantes.get(col, 0) 
+    #         }
+
+    stats_after = calculer_stats(df)
+
 
     # Export CSV
     output = io.BytesIO()
@@ -205,7 +236,10 @@ def import_file():
 
     # Ajouter stats dans headers (JSON stringifiée)
     import json
-    response.headers["X-Data-Stats"] = json.dumps(stats)
+    response.headers["X-Data-Stats"] = json.dumps({
+        "before": stats_before,
+        "after": stats_after
+    })
     return response
 
 if __name__ == "__main__":

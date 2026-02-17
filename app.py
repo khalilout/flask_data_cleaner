@@ -113,8 +113,8 @@ def import_file():
             if abs(skewness) < 0.5:
                 if not df[col].dropna().empty:
                     df[col] = df[col].fillna(df[col].mean())
-            else:
-                df[col] = df[col].fillna(df[col].median())
+                else:
+                    df[col] = df[col].fillna(df[col].median())
 
     for col in colonnes_categorielles:
         if df[col].isnull().sum() > 0:

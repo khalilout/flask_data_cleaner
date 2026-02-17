@@ -1,6 +1,6 @@
 import os
 import numpy as np
-from flask import Flask, request, send_file, make_response
+from flask import Flask, request, send_file
 import pandas as pd
 import xmltodict
 import io
@@ -33,7 +33,7 @@ def fusion_valeurs(series):
         return cleaned[0]
     else:
         return " ; ".join(cleaned)
-    
+
 # Détection automatique des colonnes clés
 def detecter_colonnes_cles(df):
     colonnes_obj = df.select_dtypes(include=["object"]).columns
@@ -44,6 +44,7 @@ def detecter_colonnes_cles(df):
     return colonnes_cles
 
 def safe_float(value):
+    """Convertit en float ou None si NaN/inf"""
     try:
         if pd.isna(value) or np.isinf(value):
             return None
@@ -58,7 +59,9 @@ def import_file():
     file = request.files['file']
     ext = file.filename.split('.')[-1].lower()
 
-    # Lecture du fichier selon son format
+    # ═══════════════════════════════════════════════════════════════════
+    # LECTURE DU FICHIER
+    # ═══════════════════════════════════════════════════════════════════
     if ext in ['csv', 'txt']:
         df = pd.read_csv(file)
     elif ext in ['xls', 'xlsx']:
@@ -89,9 +92,9 @@ def import_file():
     else:
         return "Format non supporté", 400
 
-    # ══════════════════════════════════════════════════════════════════
+    # ═══════════════════════════════════════════════════════════════════
     # ✅✅✅ COPIE DE L'ORIGINAL AVANT TOUT TRAITEMENT ✅✅✅
-    # ══════════════════════════════════════════════════════════════════
+    # ═══════════════════════════════════════════════════════════════════
     df_original = df.copy()
 
     # Liste des valeurs manquantes
@@ -111,31 +114,34 @@ def import_file():
         "empty", "not provided", "no data"
     ]
 
-    # ══════════════════════════════════════════════════════════════════
-    # ✅✅✅ CALCUL DES STATS SUR L'ORIGINAL ✅✅✅
-    # ══════════════════════════════════════════════════════════════════
-
-    # 1️⃣ VALEURS MANQUANTES (calculées AVANT le replace)
-    stats_missing = {}
     valeurs_manquantes_lower = [str(v).lower() for v in VALEURS_MANQUANTES if v]
-    
+
+    # ═══════════════════════════════════════════════════════════════════
+    # ✅✅✅ CALCUL DES STATS SUR L'ORIGINAL (AVANT NETTOYAGE) ✅✅✅
+    # ═══════════════════════════════════════════════════════════════════
+
+    # 1️⃣ VALEURS MANQUANTES
+    stats_missing = {}
     for col in df_original.columns:
         # Compter les NaN
-        nb_nan = df_original[col].isnull().sum()
+        nb_nan = int(df_original[col].isnull().sum())
         
-        # ✅ CORRECTION : Compter les valeurs texte manquantes
-        # Convertir SEULEMENT les valeurs non-NaN en string
-        non_null_values = df_original[col].dropna().astype(str).str.strip().str.lower()
-        nb_liste = non_null_values.isin(valeurs_manquantes_lower).sum()
+        # Compter les valeurs texte manquantes (seulement sur non-NaN)
+        non_null = df_original[col].dropna()
+        if len(non_null) > 0:
+            nb_text = int(non_null.astype(str).str.strip().str.lower().isin(valeurs_manquantes_lower).sum())
+        else:
+            nb_text = 0
         
-        stats_missing[col] = int(nb_nan + nb_liste)
+        stats_missing[col] = nb_nan + nb_text
 
-    # 2️⃣ DOUBLONS (calculés AVANT la fusion)
+    # 2️⃣ DOUBLONS
     nb_doublons_total = int(df_original.duplicated().sum())
 
-    # 3️⃣ VALEURS ABERRANTES (calculées AVANT le traitement)
+    # 3️⃣ VALEURS ABERRANTES (seulement colonnes numériques)
     df_temp = df_original.copy()
-    # Convertir en numérique pour analyse
+    
+    # Convertir SEULEMENT les colonnes qui semblent numériques
     for col in df_temp.columns:
         df_temp[col] = pd.to_numeric(df_temp[col], errors='coerce')
     
@@ -149,18 +155,23 @@ def import_file():
             Q3 = serie.quantile(0.75)
             IQR = Q3 - Q1
             
-            # ✅ Détecter : IQR + valeurs négatives
+            # Détecter : IQR + valeurs négatives
             mask = (df_temp[col] < Q1 - 1.5 * IQR) | \
                    (df_temp[col] > Q3 + 1.5 * IQR) | \
-                   (df_temp[col] < 0)  # ✅ Valeurs négatives = aberrantes
+                   (df_temp[col] < 0)
             
             stats_outliers[col] = int(mask.sum())
         else:
             stats_outliers[col] = 0
 
-    # ══════════════════════════════════════════════════════════════════
-    # ✅✅✅ NETTOYAGE ✅✅✅
-    # ══════════════════════════════════════════════════════════════════
+    # Pour les colonnes non-numériques, outliers = 0
+    for col in df_original.columns:
+        if col not in stats_outliers:
+            stats_outliers[col] = 0
+
+    # ═══════════════════════════════════════════════════════════════════
+    # ✅✅✅ NETTOYAGE DES DONNÉES ✅✅✅
+    # ═══════════════════════════════════════════════════════════════════
 
     # Remplacer les valeurs manquantes par NaN
     df.replace(VALEURS_MANQUANTES, np.nan, inplace=True)
@@ -172,14 +183,20 @@ def import_file():
     elif len(df) >= 2000:
         df = df.drop_duplicates(keep='first')
 
-    # Conversion numérique
+    # ✅ CORRECTION : Convertir SEULEMENT les colonnes qui SONT numériques
+    # Identifier d'abord quelles colonnes sont numériques
     for col in df.columns:
-        df[col] = pd.to_numeric(df[col], errors='coerce')
+        # Essayer de convertir, si ça échoue complètement c'est du texte
+        test_numeric = pd.to_numeric(df[col], errors='coerce')
+        # Si plus de 50% sont des nombres valides, c'est une colonne numérique
+        if test_numeric.notna().sum() / len(df) > 0.5:
+            df[col] = test_numeric
 
-    # Remplissage des valeurs manquantes
+    # Identifier les colonnes numériques et catégorielles APRÈS conversion
     colonnes_numeriques = df.select_dtypes(include=["int64", "float64"]).columns
     colonnes_categorielles = df.select_dtypes(include=["object"]).columns
 
+    # Remplissage des valeurs manquantes - NUMÉRIQUES
     for col in colonnes_numeriques:
         if df[col].isnull().sum() > 0:
             if df[col].notna().sum() > 0:
@@ -191,12 +208,13 @@ def import_file():
             else:
                 df[col].fillna(0, inplace=True)
 
+    # Remplissage des valeurs manquantes - CATÉGORIELLES
     for col in colonnes_categorielles:
         if df[col].isnull().sum() > 0:
             mode = df[col].mode()
             df[col] = df[col].fillna(mode.iloc[0] if not mode.empty else "inconnu")
 
-    # Traitement des valeurs aberrantes
+    # Traitement des valeurs aberrantes (seulement numériques)
     outlier_method = request.form.get("outlier_method", "none")
     num_cols = df.select_dtypes(include=["int64", "float64"]).columns
 
@@ -205,7 +223,6 @@ def import_file():
             Q1 = df[col].quantile(0.25)
             Q3 = df[col].quantile(0.75)
             IQR = Q3 - Q1
-            # ✅ Pas de valeurs négatives
             lower = max(0, Q1 - 1.5*IQR)
             upper = Q3 + 1.5*IQR
             df[col] = df[col].clip(lower, upper)
@@ -216,13 +233,11 @@ def import_file():
             Q3 = df[col].quantile(0.75)
             IQR = Q3 - Q1
             med = df[col].median()
-            # ✅ Remplacer IQR + négatifs
             mask = (df[col] < Q1 - 1.5*IQR) | (df[col] > Q3 + 1.5*IQR) | (df[col] < 0)
             df.loc[mask, col] = med
             
     elif outlier_method == "log":
         for col in num_cols:
-            # ✅ Remplacer négatifs par 0 avant log
             df[col] = df[col].clip(lower=0)
             if (df[col] >= 0).all():
                 df[col] = np.log1p(df[col])
@@ -232,12 +247,11 @@ def import_file():
             Q1 = df[col].quantile(0.25)
             Q3 = df[col].quantile(0.75)
             IQR = Q3 - Q1
-            # ✅ Supprimer IQR + négatifs
             df = df[(df[col] >= 0) & (df[col] >= Q1 - 1.5*IQR) & (df[col] <= Q3 + 1.5*IQR)]
 
-    # ══════════════════════════════════════════════════════════════════
+    # ═══════════════════════════════════════════════════════════════════
     # ✅✅✅ CONSTRUCTION DES STATS FINALES ✅✅✅
-    # ══════════════════════════════════════════════════════════════════
+    # ═══════════════════════════════════════════════════════════════════
 
     stats = {}
     num_cols_final = df.select_dtypes(include=["int64", "float64"]).columns
@@ -247,6 +261,7 @@ def import_file():
         outliers = stats_outliers.get(col, 0)
 
         if col in num_cols_final:
+            # Colonnes numériques
             stats[col] = {
                 "mean": safe_float(df[col].mean()),
                 "median": safe_float(df[col].median()),
@@ -258,6 +273,7 @@ def import_file():
                 "outliers": outliers
             }
         else:
+            # Colonnes catégorielles
             mode_val = "N/A"
             if len(df[col].mode()) > 0:
                 mode_val = str(df[col].mode()[0])
@@ -266,7 +282,7 @@ def import_file():
                 "unique_count": int(df[col].nunique()),
                 "missing": missing,
                 "duplicates": nb_doublons_total,
-                "outliers": 0
+                "outliers": outliers
             }
 
     # Export CSV

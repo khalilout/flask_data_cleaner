@@ -15,7 +15,7 @@ CORS(app)
 def index():
     return "Service de nettoyage de données est opérationnel."
 
-# ✅ MODIFICATION 1 : Fusion optimisée
+# Fusion intelligente des valeurs (VERSION RAPIDE)
 def fusion_valeurs(series):
     """Version optimisée pour éviter les timeouts"""
     vals = series.tolist()
@@ -51,12 +51,14 @@ def safe_float(value):
     except:
         return None
 
+
 @app.route('/clean', methods=['POST'])
 @app.route('/api/clean', methods=['POST'])
 def import_file():
     file = request.files['file']
     ext = file.filename.split('.')[-1].lower()
 
+    # Lecture du fichier selon son format
     if ext in ['csv', 'txt']:
         df = pd.read_csv(file)
     elif ext in ['xls', 'xlsx']:
@@ -64,12 +66,35 @@ def import_file():
     elif ext == 'json':
         df = pd.read_json(file)
     elif ext == 'xml':
-        df = pd.read_xml(BytesIO(file.read()), xpath=".//record")
+        try:
+            df = pd.read_xml(BytesIO(file.read()), xpath=".//record")
+        except:
+            content = file.read()
+            data = xmltodict.parse(content)
+            root_key = list(data.keys())[0]
+            root = data[root_key]
+            if isinstance(root, list):
+                records = root
+            elif isinstance(root, dict):
+                records = None
+                for key, value in root.items():
+                    if isinstance(value, list):
+                        records = value
+                        break
+                if records is None:
+                    records = [root]
+            else:
+                records = [root]
+            df = pd.DataFrame(records)
     else:
         return "Format non supporté", 400
 
+    # ══════════════════════════════════════════════════════════════════
+    # ✅✅✅ COPIE DE L'ORIGINAL AVANT TOUT TRAITEMENT ✅✅✅
+    # ══════════════════════════════════════════════════════════════════
     df_original = df.copy()
 
+    # Liste des valeurs manquantes
     VALEURS_MANQUANTES = [
         "", " ", "  ", "   ", "\t", "\n", "\r",
         "--", "---", "—", "–", "-", "_",
@@ -86,9 +111,55 @@ def import_file():
         "empty", "not provided", "no data"
     ]
 
+    # ══════════════════════════════════════════════════════════════════
+    # ✅✅✅ CALCUL DES STATS SUR L'ORIGINAL ✅✅✅
+    # ══════════════════════════════════════════════════════════════════
+
+    # 1️⃣ VALEURS MANQUANTES (calculées AVANT le replace)
+    stats_missing = {}
+    for col in df_original.columns:
+        nb_nan = df_original[col].isnull().sum()
+        nb_liste = df_original[col].astype(str).str.lower().isin(
+            [str(v).lower() for v in VALEURS_MANQUANTES if v]
+        ).sum()
+        stats_missing[col] = int(nb_nan + nb_liste)
+
+    # 2️⃣ DOUBLONS (calculés AVANT la fusion)
+    nb_doublons_total = int(df_original.duplicated().sum())
+
+    # 3️⃣ VALEURS ABERRANTES (calculées AVANT le traitement)
+    df_temp = df_original.copy()
+    # Convertir en numérique pour analyse
+    for col in df_temp.columns:
+        df_temp[col] = pd.to_numeric(df_temp[col], errors='coerce')
+    
+    cols_num_original = df_temp.select_dtypes(include=["int64", "float64"]).columns
+    
+    stats_outliers = {}
+    for col in cols_num_original:
+        serie = df_temp[col].dropna()
+        if len(serie) > 0:
+            Q1 = serie.quantile(0.25)
+            Q3 = serie.quantile(0.75)
+            IQR = Q3 - Q1
+            
+            # ✅ Détecter : IQR + valeurs négatives
+            mask = (df_temp[col] < Q1 - 1.5 * IQR) | \
+                   (df_temp[col] > Q3 + 1.5 * IQR) | \
+                   (df_temp[col] < 0)  # ✅ Valeurs négatives = aberrantes
+            
+            stats_outliers[col] = int(mask.sum())
+        else:
+            stats_outliers[col] = 0
+
+    # ══════════════════════════════════════════════════════════════════
+    # ✅✅✅ NETTOYAGE ✅✅✅
+    # ══════════════════════════════════════════════════════════════════
+
+    # Remplacer les valeurs manquantes par NaN
     df.replace(VALEURS_MANQUANTES, np.nan, inplace=True)
     
-    # ✅ MODIFICATION 2 : Fusion conditionnelle
+    # Fusion des doublons (conditionnelle selon taille)
     colonnes_cles = detecter_colonnes_cles(df)
     if colonnes_cles and len(df) < 2000:
         df = df.groupby(colonnes_cles, as_index=False).agg(fusion_valeurs)
@@ -103,10 +174,12 @@ def import_file():
         else:
             df[col] = df[col].fillna(0)
 
+    # Colonnes texte
     text_cols = df.select_dtypes(include=["object"]).columns
     for col in text_cols:
         df[col] = df[col].fillna("inconnu")
 
+    # Remplissage des valeurs manquantes (sécurité supplémentaire)
     colonnes_numeriques = df.select_dtypes(include=["int64", "float64"]).columns
     colonnes_categorielles = df.select_dtypes(include=["object"]).columns
 
@@ -123,6 +196,7 @@ def import_file():
             mode = df[col].mode()
             df[col] = df[col].fillna(mode.iloc[0] if not mode.empty else "inconnu")
 
+    # Traitement des valeurs aberrantes
     outlier_method = request.form.get("outlier_method", "none")
     num_cols = df.select_dtypes(include=["int64", "float64"]).columns
 
@@ -130,49 +204,40 @@ def import_file():
         for col in num_cols:
             Q1 = df[col].quantile(0.25)
             Q3 = df[col].quantile(0.75)
-            df[col] = df[col].clip(Q1 - 1.5*(Q3-Q1), Q3 + 1.5*(Q3-Q1))
+            IQR = Q3 - Q1
+            # ✅ Pas de valeurs négatives
+            lower = max(0, Q1 - 1.5*IQR)
+            upper = Q3 + 1.5*IQR
+            df[col] = df[col].clip(lower, upper)
+            
     elif outlier_method == "median":
         for col in num_cols:
             Q1 = df[col].quantile(0.25)
             Q3 = df[col].quantile(0.75)
             IQR = Q3 - Q1
             med = df[col].median()
-            df.loc[(df[col] < Q1 - 1.5*IQR) | (df[col] > Q3 + 1.5*IQR), col] = med
+            # ✅ Remplacer IQR + négatifs
+            mask = (df[col] < Q1 - 1.5*IQR) | (df[col] > Q3 + 1.5*IQR) | (df[col] < 0)
+            df.loc[mask, col] = med
+            
     elif outlier_method == "log":
         for col in num_cols:
+            # ✅ Remplacer négatifs par 0 avant log
+            df[col] = df[col].clip(lower=0)
             if (df[col] >= 0).all():
                 df[col] = np.log1p(df[col])
+                
     elif outlier_method == "delete":
         for col in num_cols:
             Q1 = df[col].quantile(0.25)
             Q3 = df[col].quantile(0.75)
             IQR = Q3 - Q1
-            df = df[(df[col] >= Q1 - 1.5*IQR) & (df[col] <= Q3 + 1.5*IQR)]
+            # ✅ Supprimer IQR + négatifs
+            df = df[(df[col] >= 0) & (df[col] >= Q1 - 1.5*IQR) & (df[col] <= Q3 + 1.5*IQR)]
 
-    stats_missing = {}
-    for col in df_original.columns:
-        nb_nan = df_original[col].isnull().sum()
-        nb_liste = df_original[col].isin(VALEURS_MANQUANTES).sum()
-        stats_missing[col] = int(nb_nan + nb_liste)
-
-    nb_doublons_total = int(df_original.duplicated().sum())
-
-    df_temp = df_original.copy()
-    for col in df_temp.columns:
-        df_temp[col] = pd.to_numeric(df_temp[col], errors='coerce')
-    cols_num_original = df_temp.select_dtypes(include=["int64", "float64"]).columns
-
-    stats_outliers = {}
-    for col in cols_num_original:
-        serie = df_temp[col].dropna()
-        if len(serie) > 0:
-            Q1 = serie.quantile(0.25)
-            Q3 = serie.quantile(0.75)
-            IQR = Q3 - Q1
-            mask = (df_temp[col] < Q1 - 1.5 * IQR) | (df_temp[col] > Q3 + 1.5 * IQR)
-            stats_outliers[col] = int(mask.sum())
-        else:
-            stats_outliers[col] = 0
+    # ══════════════════════════════════════════════════════════════════
+    # ✅✅✅ CONSTRUCTION DES STATS FINALES ✅✅✅
+    # ══════════════════════════════════════════════════════════════════
 
     stats = {}
     num_cols_final = df.select_dtypes(include=["int64", "float64"]).columns
@@ -204,6 +269,7 @@ def import_file():
                 "outliers": 0
             }
 
+    # Export CSV
     output = io.BytesIO()
     df.to_csv(output, index=False)
     output.seek(0)
@@ -217,6 +283,7 @@ def import_file():
 
     response.headers["X-Data-Stats"] = json.dumps(stats)
     return response
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))

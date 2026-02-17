@@ -95,8 +95,19 @@ def import_file():
         df = df.groupby(colonnes_cles, as_index=False).agg(fusion_valeurs)
 
     # Conversion numérique
-    for col in df.columns:
-        df[col] = pd.to_numeric(df[col], errors='ignore')
+    for col in df.select_dtypes(include=["int64", "float64"]).columns:
+        df[col] = pd.to_numeric(df[col], errors='coerce')
+
+        if df[col].notna().sum() > 0:
+            df[col] = df[col].fillna(df[col].median())
+        else:
+            df[col] = df[col].fillna(0)
+
+    text_cols = df.select_dtypes(include=["object"]).columns
+
+    for col in text_cols:
+        df[col] = df[col].fillna("inconnu")
+
 
 
 

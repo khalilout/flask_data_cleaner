@@ -1,13 +1,12 @@
 import os
 import numpy as np  # ajouté
-from flask import Flask, request, send_file, make_response, jsonify
+from flask import Flask, request, send_file, make_response
 import pandas as pd
 import xmltodict
 import io
 import json
-from io import BytesIO
+from io import BytesIO 
 from flask_cors import CORS
-
 
 app = Flask(__name__)
 CORS(app)
@@ -48,19 +47,49 @@ def import_file():
 
     # Lecture du fichier selon son format
     if ext in ['csv', 'txt']:
-        df = pd.read_csv(BytesIO(file.read()))
+        df = pd.read_csv(file)
     elif ext in ['xls', 'xlsx']:
-        df = pd.read_excel(BytesIO(file.read()))
+        df = pd.read_excel(file)
     elif ext == 'json':
-        df = pd.read_json(BytesIO(file.read()))
+        df = pd.read_json(file)
     elif ext == 'xml':
         df = pd.read_xml(BytesIO(file.read()))
     else:
         return "Format non supporté", 400
+    # elif ext == 'xml':
+    #     # Lire le contenu du fichier XML
+    #     content = file.read()
+    #     data = xmltodict.parse(content)
+        
+    #     # Trouver les données (première clé du dictionnaire)
+    #     root_key = list(data.keys())[0]
+    #     root = data[root_key]
+        
+    #     # Si c'est une liste, c'est bon
+    #     if isinstance(root, list):
+    #         records = root
+    #     # Si c'est un dictionnaire
+    #     elif isinstance(root, dict):
+    #         # Chercher la première liste dans le dictionnaire
+    #         records = None
+    #         for key, value in root.items():
+    #             if isinstance(value, list):
+    #                 records = value
+    #                 break
+    #         # Si pas de liste trouvée, c'est un seul enregistrement
+    #         if records is None:
+    #             records = [root]
+    #     else:
+    #         # Si ce n'est ni liste ni dict, mettre dans une liste
+    #         records = [root]
+        
+    #     # Créer le DataFrame
+    #     df = pd.DataFrame(records) 
+    # else:
+    #     return "Format non supporté", 400
 
-    df_original = df.copy()
-    print(f"💾 Données originales sauvegardées: {df_original.shape}")
 
+    #  Nettoyage initial ("--" → NaN)
     VALEURS_MANQUANTES = [
         "", " ", "  ", "   ", "\t", "\n", "\r",
 
@@ -99,7 +128,7 @@ def import_file():
 
     # Conversion numérique
     for col in df.columns:
-        df[col] = pd.to_numeric(df[col], errors='coerce')
+        df[col] = pd.to_numeric(df[col], errors='ignore')
 
 
 
@@ -111,14 +140,13 @@ def import_file():
         if df[col].isnull().sum() > 0:
             skewness = df[col].skew()
             if abs(skewness) < 0.5:
-                if not df[col].dropna().empty:
-                    df[col] = df[col].fillna(df[col].mean())
-                else:
-                    df[col] = df[col].fillna(df[col].median())
+                df[col].fillna(df[col].mean(), inplace=True)
+            else:
+                df[col].fillna(df[col].median(), inplace=True)
 
     for col in colonnes_categorielles:
         if df[col].isnull().sum() > 0:
-            df[col] = df[col].fillna(df[col].mode()[0])
+            df[col].fillna(df[col].mode()[0], inplace=True)
 
     # Valeur Aberante
     outlier_method = request.form.get("outlier_method", "none")
@@ -149,64 +177,38 @@ def import_file():
 
             
 
-    # ✅ CORRECTION STATISTIQUES : Calculer sur l'ORIGINAL !
+    # 🔹 Calcul des statistiques pour graphes
     stats = {}
-        
-    # Calculer le nombre total de doublons sur l'ORIGINAL
-    nb_doublons_total = int(df_original.duplicated().sum())
-    print(f"📊 Doublons totaux trouvés: {nb_doublons_total}")
+    stats_avant = {}
+    nb_aberrantes = {}
+    nb_doublons_total = int(df.duplicated().sum())
 
     for col in df.columns:
-        stats[col] = {}
-            
-        # ✅ Valeurs manquantes calculées sur l'ORIGINAL
-        if col in df_original.columns:
-            stats[col]["missing"] = int(df_original[col].isnull().sum())
-            print(f"📊 {col}: {stats[col]['missing']} valeurs manquantes")
-        else:
-            stats[col]["missing"] = 0
-            
-        # ✅ Doublons calculés sur l'ORIGINAL
-        if col in df_original.columns:
-            stats[col]["duplicates"] = int(df_original[col].duplicated().sum())
-        else:
-            stats[col]["duplicates"] = 0
-            
+        stats_avant[col] = {
+            "missing": int(df[col].isnull().sum())
+        }
+        nb_aberrantes[col] = 0
+
+    for col in df.columns:
         if col in num_cols:
-            # Pour les colonnes numériques
-            # ✅ Calculer les outliers sur l'ORIGINAL
-            if col in df_original.columns:
-                # Convertir en numérique pour le calcul
-                col_original_numeric = pd.to_numeric(df_original[col], errors='coerce')
-                    
-                Q1 = col_original_numeric.quantile(0.25)
-                Q3 = col_original_numeric.quantile(0.75)
-                IQR = Q3 - Q1
-                    
-                # Compter les outliers
-                outliers_mask = (col_original_numeric < Q1 - 1.5*IQR) | (col_original_numeric > Q3 + 1.5*IQR)
-                stats[col]["outliers"] = int(outliers_mask.sum())
-                print(f"📊 {col}: {stats[col]['outliers']} valeurs aberrantes")
-            else:
-                stats[col]["outliers"] = 0
-                
-            # Statistiques descriptives (sur le nettoyé)
-            stats[col]["mean"] = float(df[col].mean())
-            stats[col]["median"] = float(df[col].median())
-            stats[col]["min"] = float(df[col].min())
-            stats[col]["max"] = float(df[col].max())
-            stats[col]["std"] = float(df[col].std())
+            stats[col] = {
+                "mean": float(df[col].mean()),
+                "median": float(df[col].median()),
+                "min": float(df[col].min()),
+                "max": float(df[col].max()),
+                "std": float(df[col].std()),
+                "missing": stats_avant.get(col, {}).get("missing", 0), 
+                "duplicates": nb_doublons_total,  
+                "outliers": nb_aberrantes.get(col, 0) 
+            }
         else:
-            # Pour les colonnes catégorielles
-            if len(df[col].mode()) > 0:
-                stats[col]["mode"] = str(df[col].mode()[0])
-            else:
-                stats[col]["mode"] = "N/A"
-                stats[col]["unique_count"] = int(df[col].nunique())
-                stats[col]["outliers"] = 0  # Pas d'outliers pour catégorielles
-
-    print(f"✅ Statistiques calculées pour {len(stats)} colonnes")
-
+            stats[col] = {
+                "mode": str(df[col].mode()[0]),
+                "unique_count": int(df[col].nunique()),
+                "missing": stats_avant.get(col, {}).get("missing", 0),
+                "duplicates": nb_doublons_total,  
+                "outliers": nb_aberrantes.get(col, 0) 
+            }
 
     # Export CSV
     output = io.BytesIO()
@@ -227,6 +229,5 @@ def import_file():
     return response
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
-    # app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
     # app.run(debug=True, port=5000)

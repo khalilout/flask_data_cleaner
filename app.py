@@ -53,7 +53,7 @@ def import_file():
     elif ext == 'json':
         df = pd.read_json(file)
     elif ext == 'xml':
-        df = pd.read_xml(BytesIO(file.read()))
+        df = pd.read_xml(BytesIO(file.read()), xpath=".//record")
     else:
         return "Format non supporté", 400
 

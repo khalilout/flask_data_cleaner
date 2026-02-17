@@ -125,7 +125,8 @@ def import_file():
 
     for col in colonnes_categorielles:
         if df[col].isnull().sum() > 0:
-            df[col].fillna(df[col].mode()[0], inplace=True)
+            mode = df[col].mode()
+            df[col] = df[col].fillna(mode.iloc[0] if not mode.empty else "inconnu")
 
     # Valeur Aberante
     outlier_method = request.form.get("outlier_method", "none")
@@ -182,7 +183,7 @@ def import_file():
             }
         else:
             stats[col] = {
-                "mode": str(df[col].mode()[0]),
+                "mode": str(df[col].mode().iloc[0] if not df[col].mode().empty else "inconnu"),
                 "unique_count": int(df[col].nunique()),
                 "missing": stats_avant.get(col, {}).get("missing", 0),
                 "duplicates": nb_doublons_total,  

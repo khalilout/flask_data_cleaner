@@ -56,38 +56,6 @@ def import_file():
         df = pd.read_xml(BytesIO(file.read()))
     else:
         return "Format non supporté", 400
-    # elif ext == 'xml':
-    #     # Lire le contenu du fichier XML
-    #     content = file.read()
-    #     data = xmltodict.parse(content)
-        
-    #     # Trouver les données (première clé du dictionnaire)
-    #     root_key = list(data.keys())[0]
-    #     root = data[root_key]
-        
-    #     # Si c'est une liste, c'est bon
-    #     if isinstance(root, list):
-    #         records = root
-    #     # Si c'est un dictionnaire
-    #     elif isinstance(root, dict):
-    #         # Chercher la première liste dans le dictionnaire
-    #         records = None
-    #         for key, value in root.items():
-    #             if isinstance(value, list):
-    #                 records = value
-    #                 break
-    #         # Si pas de liste trouvée, c'est un seul enregistrement
-    #         if records is None:
-    #             records = [root]
-    #     else:
-    #         # Si ce n'est ni liste ni dict, mettre dans une liste
-    #         records = [root]
-        
-    #     # Créer le DataFrame
-    #     df = pd.DataFrame(records) 
-    # else:
-    #     return "Format non supporté", 400
-
 
     #  Nettoyage initial ("--" → NaN)
     VALEURS_MANQUANTES = [
@@ -128,7 +96,7 @@ def import_file():
 
     # Conversion numérique
     for col in df.columns:
-        df[col] = pd.to_numeric(df[col], errors='coerce')
+        df[col] = pd.to_numeric(df[col], errors='ignore')
 
 
 
@@ -140,14 +108,13 @@ def import_file():
         if df[col].isnull().sum() > 0:
             skewness = df[col].skew()
             if abs(skewness) < 0.5:
-                df[col] = df[col].fillna(df[col].mean())
-
+                df[col].fillna(df[col].mean(), inplace=True)
             else:
-                df[col] = df[col].fillna(df[col].median())
+                df[col].fillna(df[col].median(), inplace=True)
 
     for col in colonnes_categorielles:
         if df[col].isnull().sum() > 0:
-            df[col] = df[col].fillna(df[col].mode()[0])
+            df[col].fillna(df[col].mode()[0], inplace=True)
 
     # Valeur Aberante
     outlier_method = request.form.get("outlier_method", "none")

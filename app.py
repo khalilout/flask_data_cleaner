@@ -117,11 +117,17 @@ def import_file():
 
     # 1️⃣ VALEURS MANQUANTES (calculées AVANT le replace)
     stats_missing = {}
+    valeurs_manquantes_lower = [str(v).lower() for v in VALEURS_MANQUANTES if v]
+    
     for col in df_original.columns:
+        # Compter les NaN
         nb_nan = df_original[col].isnull().sum()
-        nb_liste = df_original[col].astype(str).str.lower().isin(
-            [str(v).lower() for v in VALEURS_MANQUANTES if v]
-        ).sum()
+        
+        # ✅ CORRECTION : Compter les valeurs texte manquantes
+        # Convertir SEULEMENT les valeurs non-NaN en string
+        non_null_values = df_original[col].dropna().astype(str).str.strip().str.lower()
+        nb_liste = non_null_values.isin(valeurs_manquantes_lower).sum()
+        
         stats_missing[col] = int(nb_nan + nb_liste)
 
     # 2️⃣ DOUBLONS (calculés AVANT la fusion)
@@ -167,29 +173,23 @@ def import_file():
         df = df.drop_duplicates(keep='first')
 
     # Conversion numérique
-    for col in df.select_dtypes(include=["int64", "float64"]).columns:
+    for col in df.columns:
         df[col] = pd.to_numeric(df[col], errors='coerce')
-        if df[col].notna().sum() > 0:
-            df[col] = df[col].fillna(df[col].median())
-        else:
-            df[col] = df[col].fillna(0)
 
-    # Colonnes texte
-    text_cols = df.select_dtypes(include=["object"]).columns
-    for col in text_cols:
-        df[col] = df[col].fillna("inconnu")
-
-    # Remplissage des valeurs manquantes (sécurité supplémentaire)
+    # Remplissage des valeurs manquantes
     colonnes_numeriques = df.select_dtypes(include=["int64", "float64"]).columns
     colonnes_categorielles = df.select_dtypes(include=["object"]).columns
 
     for col in colonnes_numeriques:
         if df[col].isnull().sum() > 0:
-            skewness = df[col].skew()
-            if abs(skewness) < 0.5:
-                df[col].fillna(df[col].mean(), inplace=True)
+            if df[col].notna().sum() > 0:
+                skewness = df[col].skew()
+                if abs(skewness) < 0.5:
+                    df[col].fillna(df[col].mean(), inplace=True)
+                else:
+                    df[col].fillna(df[col].median(), inplace=True)
             else:
-                df[col].fillna(df[col].median(), inplace=True)
+                df[col].fillna(0, inplace=True)
 
     for col in colonnes_categorielles:
         if df[col].isnull().sum() > 0:

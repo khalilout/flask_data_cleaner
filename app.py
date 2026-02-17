@@ -128,7 +128,7 @@ def import_file():
 
     # Conversion numérique
     for col in df.columns:
-        df[col] = pd.to_numeric(df[col], errors='ignore')
+        df[col] = pd.to_numeric(df[col], errors='coerce')
 
 
 
@@ -140,13 +140,14 @@ def import_file():
         if df[col].isnull().sum() > 0:
             skewness = df[col].skew()
             if abs(skewness) < 0.5:
-                df[col].fillna(df[col].mean(), inplace=True)
+                df[col] = df[col].fillna(df[col].mean())
+
             else:
-                df[col].fillna(df[col].median(), inplace=True)
+                df[col] = df[col].fillna(df[col].median())
 
     for col in colonnes_categorielles:
         if df[col].isnull().sum() > 0:
-            df[col].fillna(df[col].mode()[0], inplace=True)
+            df[col] = df[col].fillna(df[col].mode()[0])
 
     # Valeur Aberante
     outlier_method = request.form.get("outlier_method", "none")

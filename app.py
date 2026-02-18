@@ -1,42 +1,148 @@
 import os
-import numpy as np  # ajouté
-from flask import Flask, request, send_file, make_response
+import numpy as np
+from flask import Flask, request, send_file
 import pandas as pd
 import xmltodict
 import io
 import json
-from io import BytesIO 
+from io import BytesIO
 from flask_cors import CORS
 
 app = Flask(__name__)
+CORS(app)
+
 @app.route("/")
 def index():
     return "Service de nettoyage de données est opérationnel."
 
-#  Fusion intelligente des valeurs
+
+# ═══════════════════════════════════════════════════════════════════
+# UTILITAIRES
+# ═══════════════════════════════════════════════════════════════════
+
 def fusion_valeurs(series):
-    valeurs = series.dropna().astype(str)
-    valeurs = valeurs[valeurs.str.strip() != ""]
-    uniques = valeurs.unique()
+    """Fusion intelligente des valeurs dupliquées (version optimisée)."""
+    vals = series.tolist()
+    cleaned = []
+    for v in vals:
+        if v is None or (isinstance(v, float) and np.isnan(v)):
+            continue
+        s = str(v).strip()
+        if s and s not in cleaned:
+            cleaned.append(s)
 
-    if len(uniques) == 0:
+    if len(cleaned) == 0:
         return np.nan
-    elif len(uniques) == 1:
-        return uniques[0]
+    elif len(cleaned) == 1:
+        return cleaned[0]
     else:
-        return " ; ".join(uniques)
-    
-#  Détection automatique des colonnes clés
+        return " ; ".join(cleaned)
+
+
 def detecter_colonnes_cles(df):
+    """Détecte les colonnes texte à utiliser comme clés pour la fusion de doublons."""
     colonnes_obj = df.select_dtypes(include=["object"]).columns
-    colonnes_cles = []
+    return [col for col in colonnes_obj if df[col].nunique() > 1]
 
-    for col in colonnes_obj:
-        if df[col].nunique() > 1:
-            colonnes_cles.append(col)
 
-    return colonnes_cles
+def safe_float(value):
+    """Convertit en float ou None si NaN/inf."""
+    try:
+        if pd.isna(value) or np.isinf(value):
+            return None
+        return float(value)
+    except Exception:
+        return None
 
+
+# ═══════════════════════════════════════════════════════════════════
+# CORRECTION 1 — Détection des anomalies de type dans les colonnes
+# ═══════════════════════════════════════════════════════════════════
+
+def detecter_anomalies_type(df_original):
+    """
+    Détecte deux cas que l'IQR seul ne couvre pas :
+      • Valeur NUMÉRIQUE dans une colonne CATÉGORIELLE  → ex: OWN_OCCUPIED="12"
+      • Valeur TEXTE non numérique dans une colonne NUMÉRIQUE → ex: NUM_BATH="HURLEY"
+
+    Retourne un dict {colonne: nb_anomalies} et la liste des cellules concernées
+    pour le logging.
+    """
+    anomalies = {}
+    details = {}
+
+    for col in df_original.columns:
+        serie = df_original[col].dropna().astype(str).str.strip()
+
+        # Tente de convertir chaque valeur en nombre
+        as_numeric = pd.to_numeric(serie, errors='coerce')
+        pct_numeric = as_numeric.notna().sum() / len(serie) if len(serie) > 0 else 0
+
+        if pct_numeric <= 0.5:
+            # Colonne CATÉGORIELLE → on cherche les valeurs qui sont des nombres
+            masque_num = as_numeric.notna()
+            nb = int(masque_num.sum())
+            if nb > 0:
+                anomalies[col] = anomalies.get(col, 0) + nb
+                details[col] = details.get(col, [])
+                details[col] += [
+                    f"valeur numérique dans col. catégorielle : '{v}'"
+                    for v in serie[masque_num].tolist()
+                ]
+        else:
+            # Colonne NUMÉRIQUE → on cherche les valeurs qui ne sont PAS des nombres
+            masque_txt = as_numeric.isna()
+            nb = int(masque_txt.sum())
+            if nb > 0:
+                anomalies[col] = anomalies.get(col, 0) + nb
+                details[col] = details.get(col, [])
+                details[col] += [
+                    f"texte invalide dans col. numérique : '{v}'"
+                    for v in serie[masque_txt].tolist()
+                ]
+
+    return anomalies, details
+
+
+# ═══════════════════════════════════════════════════════════════════
+# CORRECTION 2 — Nettoyage des anomalies de type
+# ═══════════════════════════════════════════════════════════════════
+
+def corriger_anomalies_type(df):
+    """
+    Corrige les anomalies détectées :
+      • Valeur numérique dans colonne catégorielle → remplacée par NaN
+        (sera ensuite remplie par le mode de la colonne)
+      • Valeur texte non numérique dans colonne numérique → remplacée par NaN
+        (sera ensuite remplie par moyenne ou médiane)
+    """
+    for col in df.columns:
+        serie = df[col].dropna().astype(str).str.strip()
+        as_numeric = pd.to_numeric(serie, errors='coerce')
+        pct_numeric = as_numeric.notna().sum() / len(serie) if len(serie) > 0 else 0
+
+        if pct_numeric <= 0.5:
+            # Colonne catégorielle : remplacer les valeurs numériques par NaN
+            def remplacer_num_dans_cat(val):
+                if pd.isna(val):
+                    return val
+                try:
+                    float(str(val).strip())
+                    return np.nan  # c'est un nombre → anomalie → NaN
+                except ValueError:
+                    return val
+            df[col] = df[col].apply(remplacer_num_dans_cat)
+
+        else:
+            # Colonne numérique : remplacer les textes invalides par NaN
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+
+    return df
+
+
+# ═══════════════════════════════════════════════════════════════════
+# ROUTE PRINCIPALE
+# ═══════════════════════════════════════════════════════════════════
 
 @app.route('/clean', methods=['POST'])
 @app.route('/api/clean', methods=['POST'])
@@ -44,7 +150,9 @@ def import_file():
     file = request.files['file']
     ext = file.filename.split('.')[-1].lower()
 
-    # Lecture du fichier selon son format
+    # ───────────────────────────────────────────────────────────────
+    # LECTURE DU FICHIER
+    # ───────────────────────────────────────────────────────────────
     if ext in ['csv', 'txt']:
         df = pd.read_csv(file)
     elif ext in ['xls', 'xlsx']:
@@ -54,7 +162,7 @@ def import_file():
     elif ext == 'xml':
         try:
             df = pd.read_xml(BytesIO(file.read()), xpath=".//record")
-        except:
+        except Exception:
             content = file.read()
             data = xmltodict.parse(content)
             root_key = list(data.keys())[0]
@@ -74,45 +182,18 @@ def import_file():
             df = pd.DataFrame(records)
     else:
         return "Format non supporté", 400
-    # elif ext == 'xml':
-    #     # Lire le contenu du fichier XML
-    #     content = file.read()
-    #     data = xmltodict.parse(content)
-        
-    #     # Trouver les données (première clé du dictionnaire)
-    #     root_key = list(data.keys())[0]
-    #     root = data[root_key]
-        
-    #     # Si c'est une liste, c'est bon
-    #     if isinstance(root, list):
-    #         records = root
-    #     # Si c'est un dictionnaire
-    #     elif isinstance(root, dict):
-    #         # Chercher la première liste dans le dictionnaire
-    #         records = None
-    #         for key, value in root.items():
-    #             if isinstance(value, list):
-    #                 records = value
-    #                 break
-    #         # Si pas de liste trouvée, c'est un seul enregistrement
-    #         if records is None:
-    #             records = [root]
-    #     else:
-    #         # Si ce n'est ni liste ni dict, mettre dans une liste
-    #         records = [root]
-        
-    #     # Créer le DataFrame
-    #     df = pd.DataFrame(records) 
-    # else:
-    #     return "Format non supporté", 400
 
+    # ───────────────────────────────────────────────────────────────
+    # COPIE DE L'ORIGINAL AVANT TOUT TRAITEMENT
+    # ───────────────────────────────────────────────────────────────
+    df_original = df.copy()
 
-    #  Nettoyage initial ("--" → NaN)
+    # Liste des valeurs manquantes textuelles
     VALEURS_MANQUANTES = [
         "", " ", "  ", "   ", "\t", "\n", "\r",
         "--", "---", "—", "–", "-", "_",
         "?", "??", "***", "*",
-        "NA", "N/A", "n/a", "n/a", "na", "Na",
+        "NA", "N/A", "n/a", "na", "Na",
         "NULL", "null", "None", "none", "Nil", "nil",
         "Missing", "missing", "Unknown", "unknown",
         "Undefined", "undefined",
@@ -123,38 +204,125 @@ def import_file():
         "vide", "inconnu", "non renseigné", "non disponible", "aucun",
         "empty", "not provided", "no data"
     ]
+    valeurs_manquantes_lower = [str(v).lower() for v in VALEURS_MANQUANTES if v]
 
+    # ───────────────────────────────────────────────────────────────
+    # STATS AVANT NETTOYAGE — 1. VALEURS MANQUANTES
+    # ───────────────────────────────────────────────────────────────
+    stats_missing = {}
+    for col in df_original.columns:
+        nb_nan = int(df_original[col].isnull().sum())
+        non_null = df_original[col].dropna()
+        if len(non_null) > 0:
+            nb_text = int(
+                non_null.astype(str).str.strip().str.lower()
+                .isin(valeurs_manquantes_lower).sum()
+            )
+        else:
+            nb_text = 0
+        stats_missing[col] = nb_nan + nb_text
+
+    # ───────────────────────────────────────────────────────────────
+    # STATS AVANT NETTOYAGE — 2. DOUBLONS
+    # ───────────────────────────────────────────────────────────────
+    nb_doublons_total = int(df_original.duplicated().sum())
+
+    # ───────────────────────────────────────────────────────────────
+    # STATS AVANT NETTOYAGE — 3. OUTLIERS IQR + négatifs
+    # ───────────────────────────────────────────────────────────────
+    df_temp = df_original.copy()
+    for col in df_temp.columns:
+        df_temp[col] = pd.to_numeric(df_temp[col], errors='coerce')
+
+    cols_num_original = df_temp.select_dtypes(include=["int64", "float64"]).columns
+
+    stats_outliers = {}
+    for col in cols_num_original:
+        serie = df_temp[col].dropna()
+        if len(serie) > 0:
+            Q1 = serie.quantile(0.25)
+            Q3 = serie.quantile(0.75)
+            IQR = Q3 - Q1
+            mask = (
+                (df_temp[col] < Q1 - 1.5 * IQR) |
+                (df_temp[col] > Q3 + 1.5 * IQR) |
+                (df_temp[col] < 0)
+            )
+            stats_outliers[col] = int(mask.sum())
+        else:
+            stats_outliers[col] = 0
+
+    for col in df_original.columns:
+        if col not in stats_outliers:
+            stats_outliers[col] = 0
+
+    # ───────────────────────────────────────────────────────────────
+    # STATS AVANT NETTOYAGE — 4. ANOMALIES DE TYPE (NOUVEAU ✅)
+    # Détecte OWN_OCCUPIED="12" et NUM_BATH="HURLEY"
+    # ───────────────────────────────────────────────────────────────
+    anomalies_type, details_anomalies = detecter_anomalies_type(df_original)
+
+    # On ajoute les anomalies de type aux outliers pour l'affichage frontend
+    for col, nb in anomalies_type.items():
+        stats_outliers[col] = stats_outliers.get(col, 0) + nb
+
+    # ───────────────────────────────────────────────────────────────
+    # NETTOYAGE — Étape 1 : valeurs manquantes textuelles → NaN
+    # ───────────────────────────────────────────────────────────────
     df.replace(VALEURS_MANQUANTES, np.nan, inplace=True)
-    
 
-    #  FUSION DES DOUBLONS (IMPORTANT)
+    # ───────────────────────────────────────────────────────────────
+    # NETTOYAGE — Étape 2 (NOUVEAU ✅) : corriger anomalies de type
+    # OWN_OCCUPIED="12" → NaN  |  NUM_BATH="HURLEY" → NaN
+    # ───────────────────────────────────────────────────────────────
+    df = corriger_anomalies_type(df)
+
+    # ───────────────────────────────────────────────────────────────
+    # NETTOYAGE — Étape 3 : fusion/suppression des doublons
+    # ───────────────────────────────────────────────────────────────
     colonnes_cles = detecter_colonnes_cles(df)
-    if colonnes_cles:
+    if colonnes_cles and len(df) < 2000:
         df = df.groupby(colonnes_cles, as_index=False).agg(fusion_valeurs)
+    elif len(df) >= 2000:
+        df = df.drop_duplicates(keep='first')
 
-    # Conversion numérique
+    # ───────────────────────────────────────────────────────────────
+    # NETTOYAGE — Étape 4 : conversion des colonnes numériques
+    # (seulement si > 50 % de valeurs numériques valides)
+    # ───────────────────────────────────────────────────────────────
     for col in df.columns:
-        df[col] = pd.to_numeric(df[col], errors='ignore')
+        test_numeric = pd.to_numeric(df[col], errors='coerce')
+        if len(df) > 0 and test_numeric.notna().sum() / len(df) > 0.5:
+            df[col] = test_numeric
 
+    colonnes_numeriques   = df.select_dtypes(include=["int64", "float64"]).columns
+    colonnes_categorielles = df.select_dtypes(include=["object"]).columns
 
-
-    # Valeurs manquantes
-    colonnes_numeriques = df.select_dtypes(include=["int64", "float64"]).columns #si la colonne est numérique
-    colonnes_categorielles = df.select_dtypes(include=["object"]).columns #si la colonne est catégorielle
-
+    # ───────────────────────────────────────────────────────────────
+    # NETTOYAGE — Étape 5 : remplissage des NaN numériques
+    # ───────────────────────────────────────────────────────────────
     for col in colonnes_numeriques:
         if df[col].isnull().sum() > 0:
-            skewness = df[col].skew()
-            if abs(skewness) < 0.5:
-                df[col].fillna(df[col].mean(), inplace=True)
+            if df[col].notna().sum() > 0:
+                skewness = df[col].skew()
+                if abs(skewness) < 0.5:
+                    df[col].fillna(df[col].mean(), inplace=True)
+                else:
+                    df[col].fillna(df[col].median(), inplace=True)
             else:
-                df[col].fillna(df[col].median(), inplace=True)
+                df[col].fillna(0, inplace=True)
 
+    # ───────────────────────────────────────────────────────────────
+    # NETTOYAGE — Étape 6 : remplissage des NaN catégoriels
+    # ───────────────────────────────────────────────────────────────
     for col in colonnes_categorielles:
         if df[col].isnull().sum() > 0:
-            df[col].fillna(df[col].mode()[0], inplace=True)
+            mode = df[col].mode()
+            df[col] = df[col].fillna(mode.iloc[0] if not mode.empty else "inconnu")
 
-    # Valeur Aberante
+    # ───────────────────────────────────────────────────────────────
+    # NETTOYAGE — Étape 7 : traitement des outliers IQR
+    # ───────────────────────────────────────────────────────────────
     outlier_method = request.form.get("outlier_method", "none")
     num_cols = df.select_dtypes(include=["int64", "float64"]).columns
 
@@ -162,78 +330,94 @@ def import_file():
         for col in num_cols:
             Q1 = df[col].quantile(0.25)
             Q3 = df[col].quantile(0.75)
-            df[col] = df[col].clip(Q1 - 1.5*(Q3-Q1), Q3 + 1.5*(Q3-Q1))
+            IQR = Q3 - Q1
+            lower = max(0, Q1 - 1.5 * IQR)
+            upper = Q3 + 1.5 * IQR
+            df[col] = df[col].clip(lower, upper)
+
     elif outlier_method == "median":
         for col in num_cols:
             Q1 = df[col].quantile(0.25)
             Q3 = df[col].quantile(0.75)
             IQR = Q3 - Q1
             med = df[col].median()
-            df.loc[(df[col] < Q1 - 1.5*IQR) | (df[col] > Q3 + 1.5*IQR), col] = med
+            mask = (
+                (df[col] < Q1 - 1.5 * IQR) |
+                (df[col] > Q3 + 1.5 * IQR) |
+                (df[col] < 0)
+            )
+            df.loc[mask, col] = med
+
     elif outlier_method == "log":
         for col in num_cols:
+            df[col] = df[col].clip(lower=0)
             if (df[col] >= 0).all():
                 df[col] = np.log1p(df[col])
+
     elif outlier_method == "delete":
         for col in num_cols:
             Q1 = df[col].quantile(0.25)
             Q3 = df[col].quantile(0.75)
             IQR = Q3 - Q1
-            df = df[(df[col] >= Q1 - 1.5*IQR) & (df[col] <= Q3 + 1.5*IQR)]
+            df = df[
+                (df[col] >= 0) &
+                (df[col] >= Q1 - 1.5 * IQR) &
+                (df[col] <= Q3 + 1.5 * IQR)
+            ]
 
-            
-
-    # 🔹 Calcul des statistiques pour graphes
+    # ───────────────────────────────────────────────────────────────
+    # CONSTRUCTION DES STATS FINALES
+    # ───────────────────────────────────────────────────────────────
     stats = {}
-    stats_avant = {}
-    nb_aberrantes = {}
-    nb_doublons_total = int(df.duplicated().sum())
+    num_cols_final = df.select_dtypes(include=["int64", "float64"]).columns
 
     for col in df.columns:
-        stats_avant[col] = {
-            "missing": int(df[col].isnull().sum())
-        }
-        nb_aberrantes[col] = 0
+        missing  = stats_missing.get(col, 0)
+        outliers = stats_outliers.get(col, 0)
 
-    for col in df.columns:
-        if col in num_cols:
+        if col in num_cols_final:
             stats[col] = {
-                "mean": float(df[col].mean()),
-                "median": float(df[col].median()),
-                "min": float(df[col].min()),
-                "max": float(df[col].max()),
-                "std": float(df[col].std()),
-                "missing": stats_avant.get(col, {}).get("missing", 0), 
-                "duplicates": nb_doublons_total,  
-                "outliers": nb_aberrantes.get(col, 0) 
+                "mean":       safe_float(df[col].mean()),
+                "median":     safe_float(df[col].median()),
+                "min":        safe_float(df[col].min()),
+                "max":        safe_float(df[col].max()),
+                "std":        safe_float(df[col].std()),
+                "missing":    missing,
+                "duplicates": nb_doublons_total,
+                "outliers":   outliers,
+                # NOUVEAU : anomalies de type comptabilisées séparément
+                "type_anomalies": anomalies_type.get(col, 0),
             }
         else:
+            mode_val = "N/A"
+            if len(df[col].mode()) > 0:
+                mode_val = str(df[col].mode()[0])
             stats[col] = {
-                "mode": str(df[col].mode()[0]),
+                "mode":         mode_val,
                 "unique_count": int(df[col].nunique()),
-                "missing": stats_avant.get(col, {}).get("missing", 0),
-                "duplicates": nb_doublons_total,  
-                "outliers": nb_aberrantes.get(col, 0) 
+                "missing":      missing,
+                "duplicates":   nb_doublons_total,
+                "outliers":     outliers,
+                # NOUVEAU : anomalies de type comptabilisées séparément
+                "type_anomalies": anomalies_type.get(col, 0),
             }
 
-    # Export CSV
+    # ───────────────────────────────────────────────────────────────
+    # EXPORT CSV
+    # ───────────────────────────────────────────────────────────────
     output = io.BytesIO()
     df.to_csv(output, index=False)
     output.seek(0)
 
-    # Retour CSV avec stats dans headers (Laravel pourra les lire)
     response = send_file(
         output,
         mimetype='text/csv',
         as_attachment=True,
         download_name='donnees_nettoyees.csv'
     )
-
-    # Ajouter stats dans headers (JSON stringifiée)
-    import json
     response.headers["X-Data-Stats"] = json.dumps(stats)
     return response
 
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
-    # app.run(debug=True, port=5000)

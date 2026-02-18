@@ -5,6 +5,8 @@ import pandas as pd
 import xmltodict
 import io
 import json
+from io import BytesIO 
+from flask_cors import CORS
 
 app = Flask(__name__)
 @app.route("/")
@@ -50,33 +52,26 @@ def import_file():
     elif ext == 'json':
         df = pd.read_json(file)
     elif ext == 'xml':
-        # ✅ CORRECTION LIGNE 52-68 : Meilleure gestion du XML
         try:
+            df = pd.read_xml(BytesIO(file.read()), xpath=".//record")
+        except:
             content = file.read()
             data = xmltodict.parse(content)
-            
-            # Essayer de trouver les enregistrements
-            if 'root' in data:
-                records = data['root']
+            root_key = list(data.keys())[0]
+            root = data[root_key]
+            if isinstance(root, list):
+                records = root
+            elif isinstance(root, dict):
+                records = None
+                for key, value in root.items():
+                    if isinstance(value, list):
+                        records = value
+                        break
+                if records is None:
+                    records = [root]
             else:
-                # Prendre le premier élément
-                root_key = list(data.keys())[0]
-                records = data[root_key]
-            
-            # Si c'est un dictionnaire unique, le transformer en liste
-            if isinstance(records, dict):
-                if any(isinstance(v, list) for v in records.values()):
-                    # Il y a des listes dans le dict, prendre la première liste
-                    for key, value in records.items():
-                        if isinstance(value, list):
-                            records = value
-                            break
-                else:
-                    records = [records]
-            
+                records = [root]
             df = pd.DataFrame(records)
-        except Exception as e:
-            return f"Erreur lors de la lecture du fichier XML: {str(e)}", 400
     else:
         return "Format non supporté", 400
     # elif ext == 'xml':
@@ -115,29 +110,17 @@ def import_file():
     #  Nettoyage initial ("--" → NaN)
     VALEURS_MANQUANTES = [
         "", " ", "  ", "   ", "\t", "\n", "\r",
-
         "--", "---", "—", "–", "-", "_",
         "?", "??", "***", "*",
-
-        "NA", "N/A", "n/a", "na", "Na",
-        "NULL", "null",
-        "None", "none",
-        "Nil", "nil",
-
-        "Missing", "missing",
-        "Unknown", "unknown",
+        "NA", "N/A", "n/a", "n/a", "na", "Na",
+        "NULL", "null", "None", "none", "Nil", "nil",
+        "Missing", "missing", "Unknown", "unknown",
         "Undefined", "undefined",
-
         "Not Available", "not available",
         "Not Applicable", "not applicable",
-
-        "#N/A", "#NA", "#VALUE!", "#DIV/0!, "n/a", "n.a.", "n.a", "na", "NA", "N/A",
+        "#N/A", "#NA", "#VALUE!", "#DIV/0!",
         "#REF!", "#NAME?", "#NUM!",
-
-        "vide", "inconnu",
-        "non renseigné", "non disponible",
-        "aucun",
-
+        "vide", "inconnu", "non renseigné", "non disponible", "aucun",
         "empty", "not provided", "no data"
     ]
 

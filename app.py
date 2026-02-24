@@ -104,7 +104,7 @@ def import_file():
     # 2️⃣ DOUBLONS TOTAUX (ligne complète identique)
     nb_doublons_total = int(df_original.duplicated(keep='first').sum())
 
-    # 3️⃣ VALEURS ABERRANTES PAR COLONNE
+    # 3️⃣ VALEURS ABERRANTES PAR COLONNE (NUMÉRIQUES + CATÉGORIELLES)
     df_temp = df_original.copy()
     for col in df_temp.columns:
         df_temp[col] = pd.to_numeric(df_temp[col], errors='coerce')
@@ -112,6 +112,8 @@ def import_file():
     cols_num_original = df_temp.select_dtypes(include=["int64", "float64"]).columns
     
     stats_outliers = {}
+    
+    # ✅ OUTLIERS NUMÉRIQUES (méthode IQR classique)
     for col in cols_num_original:
         serie = df_temp[col].dropna()
         if len(serie) > 0:
@@ -125,9 +127,39 @@ def import_file():
         else:
             stats_outliers[col] = 0
 
+    # ✅ OUTLIERS CATÉGORIELS (valeurs rares/anormales)
+    # Exemple : dans OWN_OCCUPIED qui contient Y, Y, N, Y, N, "12", Y...
+    # Le "12" est une valeur aberrante car elle apparaît rarement
     for col in df_original.columns:
         if col not in stats_outliers:
-            stats_outliers[col] = 0
+            # Pour les colonnes catégorielles, compter les valeurs "rares"
+            # Une valeur est considérée comme aberrante si :
+            # 1. Elle apparaît dans < 5% des lignes
+            # 2. ET la colonne a au moins 2 valeurs dominantes qui représentent > 80%
+            
+            serie = df_original[col].dropna()
+            if len(serie) == 0:
+                stats_outliers[col] = 0
+                continue
+            
+            # Fréquence de chaque valeur
+            value_counts = serie.value_counts()
+            total = len(serie)
+            
+            # Calculer le % des 2 valeurs les plus fréquentes
+            top_2_pct = (value_counts.head(2).sum() / total) if len(value_counts) >= 2 else 0
+            
+            # Si les 2 valeurs dominantes représentent > 80%, les autres sont aberrantes
+            if top_2_pct > 0.80:
+                # Compter toutes les valeurs qui ne sont PAS dans le top 2
+                top_2_values = value_counts.head(2).index
+                outlier_count = int((~serie.isin(top_2_values)).sum())
+                stats_outliers[col] = outlier_count
+            else:
+                # Sinon, utiliser le seuil de 5% (valeurs très rares)
+                rare_values = value_counts[value_counts / total < 0.05]
+                outlier_count = int(rare_values.sum())
+                stats_outliers[col] = outlier_count
 
     # ═══════════════════════════════════════════════════════════════════
     # ✅ NETTOYAGE DES DONNÉES
@@ -166,8 +198,26 @@ def import_file():
         if df[col].isnull().sum() > 0:
             mode = df[col].mode()
             df[col] = df[col].fillna(mode.iloc[0] if not mode.empty else "inconnu")
+    
+    # ✅ NETTOYAGE DES OUTLIERS CATÉGORIELS
+    # Remplacer les valeurs aberrantes par le mode (valeur la plus fréquente)
+    for col in colonnes_categorielles:
+        value_counts = df[col].value_counts()
+        if len(value_counts) >= 2:
+            total = len(df[col].dropna())
+            top_2_pct = (value_counts.head(2).sum() / total) if total > 0 else 0
+            
+            # Si les 2 valeurs dominantes représentent > 80%
+            if top_2_pct > 0.80:
+                top_2_values = value_counts.head(2).index.tolist()
+                mode_value = value_counts.index[0]  # La valeur la plus fréquente
+                
+                # Remplacer toutes les autres valeurs par le mode
+                df.loc[~df[col].isin(top_2_values), col] = mode_value
+                
+                print(f"✅ {col}: valeurs aberrantes remplacées par '{mode_value}'")
 
-    # Traitement des valeurs aberrantes
+    # Traitement des valeurs aberrantes NUMÉRIQUES
     outlier_method = request.form.get("outlier_method", "none")
     num_cols = df.select_dtypes(include=["int64", "float64"]).columns
 
